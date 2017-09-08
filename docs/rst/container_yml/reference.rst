@@ -220,6 +220,8 @@ with a checkmark in the *Supported* column can be used.
 Directive             Definition                                               Supported?
 ===================== ======================================================== ============
 build                 Run Dockerfile based build
+build_command         Command executed by the container at startup when
+                      conductor is building image
 cap_add               Add container capabilities
 cap_drop              Drop container capabilities
 command               Command executed by the container at startup             |checkmark|
