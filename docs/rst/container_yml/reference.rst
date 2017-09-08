@@ -221,7 +221,7 @@ Directive             Definition                                               S
 ===================== ======================================================== ============
 build                 Run Dockerfile based build
 build_command         Command executed by the container at startup when
-                      conductor is building image
+                      conductor is building image                              |checkmark|
 cap_add               Add container capabilities
 cap_drop              Drop container capabilities
 command               Command executed by the container at startup             |checkmark|
