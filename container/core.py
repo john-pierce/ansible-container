@@ -731,6 +731,9 @@ def conductorcmd_build(engine_name, project_name, services, cache=True, local_py
                     environment=dict(ANSIBLE_CONTAINER=1)
                 )
 
+                if service.get('build_command'):
+                    run_kwargs['command'] = service['build_command']
+
                 if service.get('volumes'):
                     for volume in service['volumes']:
                         pieces = volume.split(':')
