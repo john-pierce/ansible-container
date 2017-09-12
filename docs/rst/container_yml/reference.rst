@@ -321,7 +321,7 @@ consider the following ``container.yml`` file:
 In this example, when ``ansible-container build`` is executed, the options found in *build_overrides* will
 take effect, and the building container will run command ``/usr/sbin/init`` rather than default ``sh -c "while true; do sleep 1; done``, have extra environment variables ``container=docker`` mapped to the container's environment and the container's working directory will be ``/somepath``.
 
-The ``run`` and ``deploy`` commands ignore *build_overrides*. When ``run`` or ``deploy`` executes, the container will not run the command or use environment variables specified in ``build_overrides` directive.
+The ``run`` and ``deploy`` commands ignore *build_overrides*. When ``run`` or ``deploy`` executes, the container will not run the command or use environment variables specified in ``build_overrides`` directive.
 
 Supported directives in ``build_overrides`` are ``command``, ``user``, ``working_dir``, ``privileged`` and ``environment``
 
