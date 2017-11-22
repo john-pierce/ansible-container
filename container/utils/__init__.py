@@ -36,22 +36,35 @@ __all__ = ['conductor_dir', 'make_temp_dir', 'get_config', 'assert_initialized',
            'metadata_to_image_config', 'create_role_from_templates',
            'resolve_role_to_path', 'get_role_fingerprint', 'get_content_from_role',
            'get_metadata_from_role', 'get_defaults_from_role', 'text',
-           'ordereddict_to_list', 'list_to_ordereddict']
+           'ordereddict_to_list', 'list_to_ordereddict', 'modules_to_install',
+           'roles_to_install', 'ansible_config_exists', 'create_file']
 
 conductor_dir = os.path.dirname(container.__file__)
 make_temp_dir = MakeTempDir
 
 
-def get_config(base_path, vars_files=None, engine_name=None, project_name=None, vault_files=None):
+def get_config(base_path, vars_files=None, engine_name=None, project_name=None, vault_files=None, config_file=None):
     mod = importlib.import_module('.%s.config' % engine_name,
                                   package='container')
     return mod.AnsibleContainerConfig(base_path, vars_files=vars_files, engine_name=engine_name,
-                                      project_name=project_name, vault_files=vault_files)
+                                      project_name=project_name, vault_files=vault_files, config_file=config_file)
 
 
-def assert_initialized(base_path):
+def resolve_config_path(base_path, config_file):
+    if not config_file:
+        raise AnsibleContainerNotInitializedException(
+            "Missing config_file. This is a bug, as it should have defaulted to 'container.yml'. "
+            "Please report this incident, so we can put a halt to such shinanigans!"
+        )
+    # The config file may live outside the project path. However, when no path specified, look for it in project path.
+    if os.path.dirname(config_file):
+        return config_file
+    return os.path.join(base_path, config_file)
+
+
+def assert_initialized(base_path, config_file=None):
     ansible_dir = os.path.normpath(base_path)
-    container_file = os.path.join(ansible_dir, 'container.yml')
+    container_file = resolve_config_path(base_path, config_file)
     if not all((
         os.path.exists(ansible_dir), os.path.isdir(ansible_dir),
         os.path.exists(container_file), os.path.isfile(container_file),
@@ -90,13 +103,16 @@ def metadata_to_image_config(metadata):
     def ports_to_exposed_ports(list_of_ports):
         to_return = {}
         for port_spec in list_of_ports:
-            exposed_ports = port_spec.rsplit(':')[-1]
+            exposed_ports = port_spec.rsplit(':', 1)[-1]
+            protocol = 'tcp'
+            if '/' in exposed_ports:
+                exposed_ports, protocol = exposed_ports.split('/')
             if '-' in exposed_ports:
                 low, high = exposed_ports.split('-', 1)
                 for port in range(int(low), int(high)+1):
-                    to_return[str(port)] = {}
+                    to_return['{}/{}'.format(str(port), protocol)] = {}
             else:
-                to_return[exposed_ports] = {}
+                to_return['{}/{}'.format(exposed_ports, protocol)] = {}
         return to_return
 
     def format_environment(environment):
@@ -108,7 +124,7 @@ def metadata_to_image_config(metadata):
         )
         if isinstance(environment, list):
             environment = {k: v for (k, v) in
-                           [item.split('=', 1) for item in environment]}
+                           [item.split('=', 1) for item in environment if '=' in item]}
         to_return.update(environment)
         return ['='.join(tpl) for tpl in iteritems(to_return)]
 
@@ -146,7 +162,7 @@ def metadata_to_image_config(metadata):
         Labels={},
         OnBuild=[]
     )
-
+    
     for metadata_key, (key, translator) in iteritems(TRANSLATORS):
         if metadata_key in metadata:
             config[key] = (translator(metadata[metadata_key]) if translator
@@ -246,6 +262,8 @@ def get_role_fingerprint(role_name):
         meta_main_path = os.path.join(role_path, 'meta', 'main.yml')
         if os.path.exists(meta_main_path):
             meta_main = yaml.safe_load(open(meta_main_path))
+            if not meta_main:
+                yield None
             for dependency in meta_main.get('dependencies', []):
                 yield dependency.get('role', None)
         else:
@@ -303,3 +321,42 @@ def list_to_ordereddict(config):
             result[key] = value
     return result
 
+@container.host_only
+def roles_to_install(base_path):
+    path = os.path.join(base_path, 'requirements.yml')
+    if os.path.exists(path) and os.path.isfile(path):
+        roles = yaml.safe_load(open(path, 'r'))
+        if roles:
+            return True
+    return False
+
+@container.host_only
+def modules_to_install(base_path):
+    path = os.path.join(base_path, 'ansible-requirements.txt')
+    if os.path.exists(path) and os.path.isfile(path):
+        with open(path, 'r') as fs:
+            for line in fs:
+                if not line.strip().startswith('#'):
+                    return True
+    return False
+
+@container.host_only
+def ansible_config_exists(base_path):
+    path = os.path.join(base_path, 'ansible.cfg')
+    if os.path.exists(path) and os.path.isfile(path):
+        return True
+    return False
+
+@container.host_only
+def create_file(file_path, contents):
+    if not os.path.exists(file_path):
+        try:
+            os.makedirs(os.path.dirname(file_path), mode=0o775)
+        except Exception:
+            pass
+
+        try:
+            with open(file_path, 'w') as fs:
+                fs.write(contents)
+        except Exception:
+            raise

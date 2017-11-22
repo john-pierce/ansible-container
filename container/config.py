@@ -16,6 +16,7 @@ from six import add_metaclass, iteritems, PY2, string_types, text_type
 
 from collections import Mapping
 from .utils.ordereddict import ordereddict
+from .utils import resolve_config_path
 from ruamel import yaml
 import container
 
@@ -26,7 +27,8 @@ if container.ENV == 'conductor':
     except ImportError:
         from ansible.vars.unsafe_proxy import AnsibleUnsafeText
 
-from .exceptions import AnsibleContainerConfigException, AnsibleContainerNotInitializedException
+from .exceptions import (AnsibleContainerConfigException, AnsibleContainerNotInitializedException,
+                         AnsibleContainerRequestException)
 from .utils import get_metadata_from_role, get_defaults_from_role
 
 # jag: Division of labor between outer utility and conductor:
@@ -51,11 +53,12 @@ class BaseAnsibleContainerConfig(Mapping):
     engine_list = ['docker', 'openshift', 'k8s']
 
     @container.host_only
-    def __init__(self, base_path, vars_files=None, engine_name=None, project_name=None, vault_files=None):
+    def __init__(self, base_path, vars_files=None, engine_name=None, project_name=None, vault_files=None,
+                 config_file=None):
         self.base_path = base_path
         self.cli_vars_files = vars_files
         self.engine_name = engine_name
-        self.config_path = path.join(self.base_path, 'container.yml')
+        self.config_path = resolve_config_path(base_path, config_file)
         self.cli_project_name = project_name
         self.cli_vault_files = vault_files
         self.remove_engines = set(self.engine_list) - set([engine_name])
@@ -71,10 +74,14 @@ class BaseAnsibleContainerConfig(Mapping):
     def project_name(self):
         if self.cli_project_name:
             # Give precedence to CLI args
+            self._validate_project_name(self.cli_project_name)
             return self.cli_project_name
         if self._config.get('settings', {}).get('project_name', None):
             # Look for settings.project_name
+            self._validate_project_name(self._config['settings']['project_name'])
             return self._config['settings']['project_name']
+        logger.info("Setting project_name not defined. Fallback to current directory name.")
+        self._validate_project_name(os.path.basename(self.base_path))
         return os.path.basename(self.base_path)
 
     @property
@@ -112,6 +119,46 @@ class BaseAnsibleContainerConfig(Mapping):
         # When pushing images or deploying, we need to know the default namespace
         pass
 
+    def get_conductor_environment(self):
+        """
+        Return a copy of settings.conductor.environment + any undefined environment variables found in 
+        any service definitions. Sets any undefined variables to corresponding variables found in the 
+        local environment. 
+        """  
+        conductor_env = copy.deepcopy(self._config.get('settings', {}).get('conductor', {}).get('environment', {}))
+        if isinstance(conductor_env, list):
+            # convert to a dict 
+            new_env = {}
+            for item in [e.split('=', 1) for e in conductor_env if '=' in e]:
+                new_env[item[0]] = item[1]
+            for item in [e for e in conductor_env if '=' not in e]:
+                new_env[item] = None
+            conductor_env = new_env
+         
+        for name, options in iteritems(self._config['services']):
+            if options.get('environment'):
+                if isinstance(options['environment'], list):
+                    for e in options['environment']:
+                        if '=' not in e and os.environ.get(e) and not conductor_env.get(e):
+                            conductor_env[e] = os.environ[e]
+                elif isinstance(options['environment'], dict):
+                    for key, value in iteritems(options['environment']):
+                        if value is None and os.environ.get(key) and not conductor_env.get(key):
+                            conductor_env[key] = os.environ[key]    
+
+        for key in conductor_env.keys():
+            if conductor_env[key] is None:
+                conductor_env[key] = os.environ.get(key)
+
+        return conductor_env 
+
+    def set_conductor_environment(self, environment):
+        if self._config.get('settings') is None: 
+            self._config['settings'] = {}
+        if self._config['settings'].get('conductor') is None:
+            self._config['settings']['conductor'] = {}
+        self._config['settings']['conductor']['environment'] = environment
+
     @abstractmethod
     def set_env(self, env, config=None):
         """
@@ -147,6 +194,24 @@ class BaseAnsibleContainerConfig(Mapping):
 
         logger.debug(u"Parsed config", config=config)
         self._config = config
+
+    def set_services(self, services):
+        if not services:
+            return
+        remove_services = list(set(self._config['services']) - set(services))
+        if remove_services:
+            for service in remove_services:
+                del self._config['services'][service]
+
+    def check_requested_services(self, services):
+        if not services:
+            return
+        missing_services = list(set(services) - set(self._config['services'].keys()))
+        if missing_services:
+            tense = '' if len(missing_services) <= 1 else 's'
+            raise AnsibleContainerRequestException(
+                "Requested service{} {} not defined in container.yml".format(tense, ', '.join(missing_services))
+            )
 
     def _update_service_config(self, env, service_config):
         if isinstance(service_config, dict):
@@ -274,6 +339,15 @@ class BaseAnsibleContainerConfig(Mapping):
             else:
                 if config[top_level] is None:
                     config[top_level] = ordereddict()
+
+    def _validate_project_name(self, project_name):
+        """
+        Validates that the project_name starts with an alphanumeric value.
+        Raises an Exception if the project_name is invalid
+        """
+        if re.match(r"^[a-zA-Z0-9]{1}.*", project_name) == None:
+            raise AnsibleContainerConfigException(u"Invalid project_name {0}\n".format(project_name)
+                + u"The project_name has to start with an alphanumeric character.")
 
     def __getitem__(self, item):
         return self._config[item]

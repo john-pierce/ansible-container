@@ -277,6 +277,8 @@ class HostCommand(object):
         parser.add_argument('--no-selinux', action='store_false', dest='selinux',
                             help=u"Disables the 'Z' option from being set on volumes automatically "
                                  u"mounted to the build container.", default=True)
+        parser.add_argument('--config-file', '-c', action='store', dest='config_file', default='container.yml',
+                            help=u"Configuration filename. Defaults to 'container.yml'")
 
         subparsers = parser.add_subparsers(title='subcommand', dest='subcommand')
         subparsers.required = True
@@ -320,9 +322,16 @@ class HostCommand(object):
         except exceptions.AnsibleContainerDockerConnectionRefused:
             logger.error('The connection to Docker was refused. Check your Docker environment configuration.',
                          exc_info=False)
+        except exceptions.AnsibleContainerDockerConnectionAborted as e:
+            logger.error('The connection to Docker was aborted. Check your Docker environment configuration.\n'
+                         'ErrorMessage: %s' % str(e),
+                         exc_info=False)
             sys.exit(1)
         except exceptions.AnsibleContainerConfigException as e:
             logger.error('Invalid container.yml: {}'.format(e), exc_info=False)
+            sys.exit(1)
+        except exceptions.AnsibleContainerRequestException as e:
+            logger.error("Invalid request: {}".format(e), exc_info=False)
             sys.exit(1)
         except requests.exceptions.ConnectionError:
             logger.error('Could not connect to container host. Check your docker config', exc_info=False)
